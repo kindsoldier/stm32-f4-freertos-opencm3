@@ -1,6 +1,4 @@
 
-/* $Id$ */
-
 #include <stdlib.h>
 
 __attribute__((always_inline)) static inline uint32_t __get_LR(void) { 
@@ -14,6 +12,5 @@ __attribute__((always_inline)) static inline uint32_t __get_SP(void) {
     __asm volatile ("mov %0, sp\n" : "=r" (result)); 
     return result;
 }
-
 
 /* EOF */

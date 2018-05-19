@@ -1,5 +1,5 @@
 
-/* $Id$ */
+/* Author, Copyright: Oleg Borodin <onborodin@gmail.com> 2018 */
 
 #include <stdlib.h>
 #include <reent.h>
@@ -8,9 +8,13 @@
 #include <libopencm3/stm32/usart.h>
 #include <errno.h>
 
+#include <FreeRTOS.h>
+#include <task.h>
+#include <queue.h>
+
 #include <syscall.h>
-#include <buffer.h>
-#include <uastdio.h>
+
+extern QueueHandle_t usart1_q;
 
 #undef errno
 extern int errno;
@@ -73,17 +77,16 @@ int _read(int file, char *ptr, int len) {
     uint8_t data = 0;
     int i = 0;
     while (i < len) {
-        ptr[i++] = 'z';
+        ptr[i++] = 0;
     }
     return i;
 }
-
 
 int _write(int file, char *ptr, int len) {
     int i;
     if (file == STDOUT | file == STDERR) {
         for (i = 0; i < len; i++) {
-            buffer_put_byte(&stdout_buffer, *ptr++);
+            xQueueSend(usart1_q, &ptr[i], portMAX_DELAY);
         }
         return len;
     }
@@ -114,29 +117,30 @@ int _wait(int *status) {
     return -1;
 }
 
-void * _sbrk(int incr) {
 
-    extern void *__heap_start;
+void *_sbrk(int incr) {
 
-    void * prev_heap_ptr;
-    static void * heap_ptr;
+    extern const void *_heap;
+    extern const void *_eheap;
+
+    void *prev_heap_ptr;
+    static void *heap_ptr;
 
     if (heap_ptr == 0) {
-        heap_ptr = (void *)&__heap_start;
+        heap_ptr = (void *)&_heap;
+    }
+
+    void * next_heap_ptr = heap_ptr + incr;
+
+    if (next_heap_ptr >= (void *) &_eheap) {
+        errno = ENOMEM;
+        return NULL;
     }
 
     prev_heap_ptr = heap_ptr;
+    heap_ptr = next_heap_ptr;
 
-    void * stack_ptr = (void *) __get_SP();
-    if (heap_ptr + incr > stack_ptr) {
-        errno = ENOMEM;
-        _write(1, "Heap and stack collision\r\n", 26);
-        abort();
-    }
-
-    heap_ptr += incr;
-
-    return (void *) prev_heap_ptr;
+    return (void *)prev_heap_ptr;
 }
 
 /* EOF */

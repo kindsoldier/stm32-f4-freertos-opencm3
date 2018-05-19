@@ -6,6 +6,10 @@
 
 #include <ili9341.h>
 
+#include <FreeRTOS.h>
+#include <task.h>
+
+
 #define LCD_COMM   *(volatile uint16_t *)(0x60000000)
 #define LCD_DATA   *(volatile uint16_t *)(0x60080000)
 
@@ -21,7 +25,9 @@ inline void delay_ms(uint32_t n) {
 }
 
 inline void lcd_write_command(uint8_t comm) {
+    taskENTER_CRITICAL();
     LCD_COMM = (uint16_t) (comm & 0xFF);
+    taskEXIT_CRITICAL();
 }
 
 inline void lcd_write_data(uint16_t data) {
@@ -29,7 +35,9 @@ inline void lcd_write_data(uint16_t data) {
 }
 
 inline void lcd_write_byte(uint8_t data) {
+    taskENTER_CRITICAL();
     LCD_DATA = (uint16_t) (data && 0xFF);
+    taskEXIT_CRITICAL();
 }
 
 inline inline void lcd_write_word(uint16_t w) {

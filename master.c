@@ -43,14 +43,36 @@
 #include <rtc4xx.h>
 #include <xpt2046.h>
 
-volatile uint32_t loop_counter = 0;
-volatile uint32_t cpu_counter = 0;
+#include <FreeRTOS.h>
+#include <task.h>
+#include <queue.h>
+#include <timers.h>
 
-volatile uint32_t rate_value = 0;
-volatile uint32_t cpu_rate_value = 0;
+/* Object definition */
 
-volatile static uint32_t systick_counter = 0;
+#define IRQ2NVIC_PRIOR(x)       ((x) << 4)
+#define UART_QUEUE_LEN      1024
+#define CONSOLE_QUEUE_LEN   8
 
+xTaskHandle usart1_task_h;
+xTaskHandle counter_task_h;
+xTaskHandle console_task_h;
+
+
+volatile QueueHandle_t usart1_q;
+volatile QueueHandle_t console_q;
+
+#define CONSOLE_STR_LEN 32
+#define STR_LEN 16
+
+typedef struct console_message_t {
+    uint8_t row;
+    uint8_t col;
+    uint8_t str[CONSOLE_STR_LEN + 1];
+} console_message_t;
+
+
+/* Generic */
 void delay(uint32_t n) {
     for (volatile int i = 0; i < n * 10; i++)
         __asm__("nop");
@@ -61,7 +83,7 @@ void _delay_ms(uint32_t n) {
         __asm__("nop");
 }
 
-
+/* RCC CLOCK */
 static void clock_setup(void) {
     rcc_clock_setup_hse_3v3(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
 
@@ -87,8 +109,18 @@ static void clock_setup(void) {
 
 }
 
-/*** USART ***/
-void usart_setup(void) {
+/* USART generic */
+
+inline bool usart_recv_is_ready(uint32_t usart) {
+    return (USART_SR(usart) & USART_SR_RXNE);
+}
+
+inline bool usart_rx_int_is_enable(uint32_t usart) {
+    return (USART_CR1(USART1) & USART_CR1_RXNEIE);
+}
+
+/* USART */
+void usart1_setup(void) {
 
     usart_disable(USART1);
     nvic_enable_irq(NVIC_USART1_IRQ);
@@ -102,122 +134,26 @@ void usart_setup(void) {
     usart_set_parity(USART1, USART_PARITY_NONE);
     usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
     usart_set_mode(USART1, USART_MODE_TX_RX);
-
     usart_enable_rx_interrupt(USART1);
-
     usart_enable(USART1);
 }
 
-inline bool usart_recv_is_ready(uint32_t usart) {
-    return (USART_SR(usart) & USART_SR_RXNE);
-}
-
-inline bool usart_rx_int_is_enable(uint32_t usart) {
-    return (USART_CR1(USART1) & USART_CR1_RXNEIE);
-}
 
 void usart1_isr(void) {
     static uint8_t data = 0;
 
     if (usart_rx_int_is_enable(USART1) && usart_recv_is_ready(USART1)) {
         data = usart_recv(USART1);
-        buffer_put_byte(&stdin_buffer, data);
-        buffer_put_byte(&stdout_buffer, data);
-        if (data == '\r')
-            buffer_put_byte(&stdout_buffer, '\n');
-    }
-}
-
-/*** TIM2 ***/
-void tim2_setup(void) {
-    nvic_enable_irq(NVIC_TIM2_IRQ);
-    timer_reset(TIM2);
-
-    timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-    timer_direction_up(TIM2);
-    timer_set_prescaler(TIM2, 64);
-    timer_disable_preload(TIM2);
-    timer_continuous_mode(TIM2);
-    timer_set_period(TIM2, 64);
-    timer_set_oc_value(TIM2, TIM_OC1, 1);
-
-    timer_enable_irq(TIM2, TIM_DIER_CC1IE);
-    timer_enable_counter(TIM2);
-}
-
-void tim2_isr(void) {
-    if (timer_get_flag(TIM2, TIM_SR_CC1IF)) {
-        timer_clear_flag(TIM2, TIM_SR_CC1IF);
-
-        uint8_t c;
-        while ((c = buffer_get_byte(&stdout_buffer)) > 0)
-            usart_send_blocking(USART1, c);
-    }
-}
-
-/*** TIM7 ***/
-void tim7_setup(void) {
-    timer_reset(TIM7);
-    timer_set_prescaler(TIM7, rcc_apb2_frequency / 1000);
-    timer_set_period(TIM7, 10000);
-
-    nvic_enable_irq(NVIC_TIM7_IRQ);
-    timer_enable_update_event(TIM7);
-    timer_enable_irq(TIM7, TIM_DIER_UIE);
-    timer_enable_counter(TIM7);
-}
-
-void tim7_isr(void) {
-    if (timer_get_flag(TIM7, TIM_SR_UIF)) {
-        timer_clear_flag(TIM7, TIM_SR_UIF);
-        rate_value = loop_counter;
-        loop_counter = 0;
-
-        volatile uint32_t cpu_counter_new = dwt_read_cycle_counter();
-        cpu_rate_value = cpu_counter_new - cpu_counter;
-        cpu_counter = cpu_counter_new;
     }
 }
 
 
-/*** SYSTICK ***/
-
-static void systick_setup(void) {
-    //systick_set_reload(168000);
-    //systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
-    systick_set_frequency(1, rcc_ahb_frequency / 1000);
-    systick_counter_enable();
-    systick_interrupt_enable();
-}
-
-void sys_tick_handler(void) {
-    systick_counter++;
-}
-
-void delay_ms(uint32_t delay) {
-    uint32_t wake = systick_counter + delay;
-    while (wake > systick_counter);
-}
-
-
-
-/*** FSMC ***/
-
-void fsmc_setup(void) {
-    /*
-       D0   PD14    D8   PE11   NOE  PD4
-       D1   PD15    D9   PE12   NWE  PD5
-       D2   PD0     D10  PE13   NE1  PD7
-       D3   PD1     D11  PE14   A18  PD13
-       D12  PE15
-       D4   PE7     
-       D5   PE8     D13  PD8
-       D6   PE9     D14  PD9
-       D7   PE10    D15  PD10
-     */
+/* FSMC */
 
 #define FSMC_PD (GPIO4 | GPIO5 | GPIO7 | GPIO13 | GPIO14 | GPIO15 | GPIO0 | GPIO1 | GPIO8 | GPIO9 | GPIO10)
 #define FSMC_PE (GPIO7 | GPIO8 | GPIO9 | GPIO10 | GPIO11 | GPIO12 | GPIO13 | GPIO14 | GPIO15)
+
+void fsmc_setup(void) {
 
     gpio_mode_setup(GPIOD, GPIO_MODE_AF, GPIO_PUPD_NONE, FSMC_PD);
     gpio_set_output_options(GPIOD, GPIO_OTYPE_PP, GPIO_OSPEED_100MHZ, FSMC_PD);
@@ -227,18 +163,6 @@ void fsmc_setup(void) {
     gpio_set_output_options(GPIOE, GPIO_OTYPE_PP, GPIO_OSPEED_100MHZ, FSMC_PE);
     gpio_set_af(GPIOE, GPIO_AF12, FSMC_PE);
 
-    /*
-       FSMC_BTR(0) = FSMC_BTR_ACCMODx(FSMC_BTx_ACCMOD_B) | 
-       FSMC_BTR_DATLATx(0) |
-       FSMC_BTR_CLKDIVx(0) |
-       FSMC_BTR_BUSTURNx(0) |
-       FSMC_BTR_DATASTx(5) |
-       FSMC_BTR_ADDHLDx(0) |
-       FSMC_BTR_ADDSETx(1);
-     */
-
-    /* FSMC_BCR(0) = FSMC_BCR_WREN | FSMC_BCR_MWID | FSMC_BCR_MBKEN; */
-
     fsmc_set_access_mode(BANK1, FSMC_BTx_ACCMOD_B);
     fsmc_set_data_latency(BANK1, 0);
     fsmc_set_clock_divide_ratio(BANK1, 0);
@@ -246,7 +170,6 @@ void fsmc_setup(void) {
     fsmc_set_data_phase_duration(BANK1, 5);
     fsmc_set_address_hold_phase_duration(BANK1, 0);
     fsmc_set_address_setup_phase_duration(BANK1, 1);
-
 
     fsmc_address_data_multiplexing_disable(BANK1);
     fsmc_write_burst_disable(BANK1);
@@ -260,165 +183,120 @@ void fsmc_setup(void) {
     fsmc_memory_bank_enable(BANK1);
 }
 
+/* TASKs */
+static void usart1_task(void *args __attribute__ ((unused))) {
+    uint8_t c;
+    while (1) {
+        if (xQueueReceive(usart1_q, &c, 10) == pdPASS) {
+            while (!usart_get_flag(USART1, USART_SR_TXE))
+                taskYIELD();
+            usart_send_blocking(USART1, c);
 
-void demo_gpio_setup(void) {
-    gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO6);
-    gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO7);
-}
-
-/*** RTC ***/
-void rtc_init(void) {
-
-    pwr_backup_domain_enable_write();
-    //rcc_backup_domain_software_reset();
-
-    rcc_rtc_clock_enable();
-    rcc_external_lowspeed_oscillator_enable();
-    rcc_rtc_clock_source_selection(RCC_BDCR_RTCSEL_LSE);
-    rtc_write_protection_disable();
-    rtc_set_calibration_output_1hz();
-    rtc_write_protection_disable();
-    rtc_calibration_output_disable();
-
-    rtc_init_mode_enable();
-    rtc_write_prescaler(0x7F, 0xFF);
-
-    rtc_init_mode_disable();
-    rtc_write_protection_enable();
-    pwr_backup_domain_disable_write();
-}
-
-
-/*** EXTI ***/
-
-#define TS_IRQ_PORT  GPIOC
-#define TS_IRQ_PIN   GPIO5
-
-static void exti5_setup(void) {
-    nvic_enable_irq(NVIC_EXTI9_5_IRQ);
-
-    gpio_mode_setup(GPIOC, GPIO_MODE_INPUT, GPIO_PUPD_PULLUP, GPIO5);
-
-    exti_set_trigger(EXTI5, EXTI_TRIGGER_BOTH);
-    exti_select_source(EXTI5, GPIOC);
-    exti_enable_request(EXTI5);
-}
-
-#define TS_PRS  1
-#define TS_RLS  2
-
-volatile static uint8_t ts_prev_status = TS_PRS;
-volatile static uint8_t ts_curr_status = TS_RLS;
-
-
-volatile static uint32_t ts_press_time = 0;
-volatile static uint32_t ts_release_time = 0;
-
-#define HOLD_TIME_MIN   10
-
-void exti9_5_isr(void) {
-
-    if (exti_get_flag_status(EXTI5)) {
-        exti_reset_request(EXTI5);
-
-        if (gpio_get(TS_IRQ_PORT, TS_IRQ_PIN)) {
-            ts_curr_status = TS_RLS;
         } else {
-            ts_curr_status = TS_PRS;
-        }
-
-        if ((ts_prev_status == TS_RLS) && (ts_curr_status == TS_PRS)) {
-            ts_prev_status = ts_curr_status;
-            ts_press_time = systick_counter;
-            return;
-        }
-
-        if ((ts_prev_status == TS_PRS) && (ts_curr_status == TS_RLS)) {
-            ts_prev_status = ts_curr_status;
-            ts_release_time = systick_counter;
-            uint32_t hold_time = ts_release_time - ts_press_time;
-
-            if (hold_time > HOLD_TIME_MIN) {
-                printf("TS UP %d\r\n", hold_time);
-            }
-
-            return;
+            taskYIELD();
         }
     }
 }
 
+void send_console_msg(uint8_t row, uint8_t col, uint8_t * str) {
+    console_message_t msg;
+    msg.row = row;
+    msg.col = col;
+    memcpy(msg.str, str, CONSOLE_STR_LEN);
+    xQueueSend(console_q, &msg, portMAX_DELAY);
+}
+
+#define MAX_TASK_COUNT  6
+void print_stats(void) {
+    volatile UBaseType_t task_count = MAX_TASK_COUNT;
+    TaskStatus_t *status_array = pvPortMalloc(task_count * sizeof(TaskStatus_t));
+
+    if (status_array != NULL) {
+        uint32_t total_time, stat_as_percentage;
+        task_count = uxTaskGetSystemState(status_array, task_count, &total_time);
+
+        total_time /= 100UL;
+        if (total_time > 0) {
+            uint16_t row = 3;
+            for (UBaseType_t x = 0; x < task_count; x++) {
+                stat_as_percentage = status_array[x].ulRunTimeCounter / total_time;
+
+                if (stat_as_percentage >= 0UL) {
+                    #define CONSOLE_MAX_STAT_ROW 8
+                    if (row < CONSOLE_MAX_STAT_ROW) {
+                        console_message_t msg;
+                        msg.row = row;
+                        msg.col = 0;
+                        snprintf(msg.str, CONSOLE_STR_LEN, "%-5s %3d %3u",
+                                 status_array[x].pcTaskName, stat_as_percentage, status_array[x].usStackHighWaterMark);
+                        xQueueSend(console_q, &msg, portMAX_DELAY);
+                    }
+                    row++;
+                }
+            }
+        }
+    }
+    vPortFree(status_array);
+}
+
+static void counter_task(void *args __attribute__ ((unused))) {
+    uint32_t i = 0;
+    uint8_t str[CONSOLE_STR_LEN + 1];
+    while (1) {
+
+        print_stats();
+
+        snprintf(str, CONSOLE_STR_LEN, "0x%08X", i);
+        send_console_msg(16, 0, str);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+        i++;
+    }
+}
+
+static void console_task(void *args __attribute__ ((unused))) {
+    console_message_t msg;
+    while (1) {
+        if (xQueueReceive(console_q, &msg, 10) == pdPASS) {
+            console_xyputs(&console, msg.row, msg.col, msg.str);
+        } else {
+            taskYIELD();
+        }
+    }
+}
+
+
+/* MAIN */
 int main(void) {
+
+    //scb_set_priority_grouping(SCB_AIRCR_PRIGROUP_GROUP16_NOSUB);
+    //nvic_set_priority(NVIC_SYSTICK_IRQ, IRQ2NVIC_PRIOR(15));
+    //nvic_set_priority(NVIC_USART1_IRQ, IRQ2NVIC_PRIOR(configMAX_PRIORITIES - 1));
+
     clock_setup();
-    systick_setup();
-    io_setup();
-    usart_setup();
-    tim2_setup();
-    tim7_setup();
-    delay(10);
+    usart1_setup();
+
+    delay(100);
 
     fsmc_setup();
     lcd_setup();
     lcd_clear();
-    ts_spi_setup();
-    exti5_setup();
-
-    //rng_enable();
-    //dwt_enable_cycle_counter();
 
     uint32_t i = 1;
+    uint8_t str[STR_LEN + 1];
 
-    console_xyputs(&console, 0, 0, "STM32-F4 CONSOLE V0.1");
+    console_xyputs(&console, 0, 0, "FreeRTOS STM32-F4 CONSOLE V0.2");
     console_xyputs(&console, 1, 0, "SYS READY>");
 
-    //rtc_init();
+    usart1_q = xQueueCreate(UART_QUEUE_LEN, sizeof(uint8_t));
+    console_q = xQueueCreate(CONSOLE_QUEUE_LEN, sizeof(console_message_t));
 
-    while (1) {
-        console_xyputs(&console, 0, 0, "STM32-F4 CONSOLE V0.1");
+    xTaskCreate(usart1_task, "UAR1", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 1, usart1_task_h);
+    xTaskCreate(counter_task, "CNTR", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, counter_task_h);
+    xTaskCreate(console_task, "CONS", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, console_task_h);
 
-#define STR_LEN 20
-        uint8_t str[STR_LEN + 1];
+    vTaskStartScheduler();
 
-        snprintf(str, STR_LEN, "RT %4u CPU %4.2f", rate_value,
-                 (cpu_rate_value * 1.0) / 168000000.0f);
-        console_xyputs(&console, 2, 0, str);
-
-#if 0
-        snprintf(str, STR_LEN, "RTC_TR 0x%08lX", RTC_TR);
-        console_xyputs(&console, 5, 0, str);
-        snprintf(str, STR_LEN, "RTC_DR 0x%08lX", RTC_DR);
-        console_xyputs(&console, 6, 0, str);
-#endif
-
-        snprintf(str, STR_LEN, "0x%08X", i);
-        console_xyputs(&console, 16, 0, str);
-
-#if 1
-
-        uint16_t y_value = i % LCD_HEIGHT;
-        uint16_t y_prev;
-
-        int16_t x_value = i % LCD_WIDTH;
-        int16_t x_prev;
-        if ((x_prev != x_value) && (y_prev != y_value)) {
-            lcd_write_rect(20, y_prev, 10, 10, LCD_BLUE);
-            lcd_write_rect(20, y_value, 10, 10, LCD_GREEN);
-        }
-        y_prev = y_value;
-        x_prev = x_value;
-#endif
-
-        while (ts_curr_status == TS_PRS) {
-            uint16_t x = ts_get_x();
-            uint16_t y = ts_get_y();
-            if (x < 25 && y < 25)
-                lcd_clear();
-            lcd_draw_pixel(x, y, LCD_BLUE);
-        }
-
-        delay_ms(10);
-        loop_counter++;
-        i++;
-    }
     return 0;
 }
 

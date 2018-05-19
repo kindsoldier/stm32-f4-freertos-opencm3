@@ -3,27 +3,38 @@
 #
 .SECONDARY:
 
-CFLAGS+= -I. -Os  -DSTM32F4 -std=c99
+RTOS_LOC = RTOS
+
+CFLAGS+= -I. -Os -DSTM32F4 -std=c99
 CFLAGS+= -mthumb -march=armv7e-m
 CFLAGS+= -mfloat-abi=hard -mfpu=fpv4-sp-d16
 CFLAGS+= -mcpu=cortex-m4
 CFLAGS+= -fno-common -ffunction-sections -fdata-sections
 CFLAGS+= -g -gdwarf-2
-#CFLAGS+= -save-temps
+CFLAGS+= -I${RTOS_LOC}
 
 
 LDFLAGS+= ${CFLAGS}
 LDFLAGS+= --static
-#LDFLAGS+= -nostartfiles
+LDFLAGS+= -nostartfiles
 LDFLAGS+= -T master.ld
 
 LDFLAGS+= -Wl,-Map=master.map
 LDFLAGS+= -Wl,--cref -Wl,--gc-sections
+LDFLAGS+= -Wl,--start-group -lc -lm -lgcc -lnosys -Wl,--end-group
 LDFLAGS+= -lopencm3_stm32f4
-#LDFLAGS+= -lc -lgcc
-LDFLAGS+= -Wl,--start-group -lc -lgcc -lnosys -Wl,--end-group
+LDFLAGS+= -L${RTOS_LOC} -lrtos
 
-all: master.bin
+
+RTOS_OBJS+= $(RTOS_LOC)/croutine.o
+RTOS_OBJS+= $(RTOS_LOC)/event_groups.o
+RTOS_OBJS+= $(RTOS_LOC)/heap_3.o
+RTOS_OBJS+= $(RTOS_LOC)/list.o
+RTOS_OBJS+= $(RTOS_LOC)/port.o
+RTOS_OBJS+= $(RTOS_LOC)/queue.o
+RTOS_OBJS+= $(RTOS_LOC)/stream_buffer.o
+RTOS_OBJS+= $(RTOS_LOC)/tasks.o
+RTOS_OBJS+= $(RTOS_LOC)/timers.o
 
 MASTER_OBJS+= master.o 
 MASTER_OBJS+= syscall.o
@@ -36,7 +47,17 @@ MASTER_OBJS+= console.o
 MASTER_OBJS+= random.o
 MASTER_OBJS+= rtc4xx.o
 MASTER_OBJS+= xpt2046.o
+MASTER_OBJS+= opencm3.o
 
+
+all: rtos master.bin
+
+rtos:  $(RTOS_LOC)/librtos.a
+
+${RTOS_OBJS}: FreeRTOSConfig.h
+
+$(RTOS_LOC)/librtos.a: $(RTOS_OBJS)
+	cd $(@D) && arm-eabi-ar rcv $(@F) $(^F)
 
 master.elf: $(MASTER_OBJS)
 	arm-eabi-gcc $(^F) $(LDFLAGS) -o $@ 
@@ -57,8 +78,9 @@ master.elf: $(MASTER_OBJS)
 
 clean:
 	rm -f *.i *.o *.elf *.bin *.map *~ *.hex *.d *.s
+	cd $(RTOS_LOC) && rm -f *.o *.d *~ lib*.a
 
-upload: master.upl
+upload: all master.upl
 
 %.upl: %.bin
 	@openocd \
@@ -77,8 +99,6 @@ upload: master.upl
 	    -c 'puts "--- DONE --------------------"' \
 	    -c "shutdown"
 
-
-
 debug:
 	@openocd \
 	    -c 'puts "--- START --------------------"' \
@@ -88,6 +108,4 @@ debug:
 	    -c "init" \
 	    -c "halt" \
 	    -c "poll"
-
-
 #EOF
