@@ -3,6 +3,7 @@
 #include <libopencm3/cm3/systick.h>
 
 #include <libopencm3/cm3/dwt.h>
+#include <libopencm3/cm3/scb.h>
 
 #include <libopencm3/stm32/syscfg.h>
 #include <libopencm3/stm32/rcc.h>
@@ -269,9 +270,9 @@ static void console_task(void *args __attribute__ ((unused))) {
 /* MAIN */
 int main(void) {
 
-    //scb_set_priority_grouping(SCB_AIRCR_PRIGROUP_GROUP16_NOSUB);
-    //nvic_set_priority(NVIC_SYSTICK_IRQ, IRQ2NVIC_PRIOR(15));
-    //nvic_set_priority(NVIC_USART1_IRQ, IRQ2NVIC_PRIOR(configMAX_PRIORITIES - 1));
+    scb_set_priority_grouping(SCB_AIRCR_PRIGROUP_GROUP16_NOSUB);
+    nvic_set_priority(NVIC_SYSTICK_IRQ, IRQ2NVIC_PRIOR(15));
+    nvic_set_priority(NVIC_USART1_IRQ, IRQ2NVIC_PRIOR(configMAX_PRIORITIES + 6));
 
     clock_setup();
     usart1_setup();
@@ -291,9 +292,9 @@ int main(void) {
     usart1_q = xQueueCreate(UART_QUEUE_LEN, sizeof(uint8_t));
     console_q = xQueueCreate(CONSOLE_QUEUE_LEN, sizeof(console_message_t));
 
-    xTaskCreate(usart1_task, "UAR1", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 1, usart1_task_h);
-    xTaskCreate(counter_task, "CNTR", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, counter_task_h);
-    xTaskCreate(console_task, "CONS", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, console_task_h);
+    xTaskCreate(usart1_task, "UAR1", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES + 1, usart1_task_h);
+    xTaskCreate(counter_task, "CNTR", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES + 2, counter_task_h);
+    xTaskCreate(console_task, "CONS", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES + 2, console_task_h);
 
     vTaskStartScheduler();
 

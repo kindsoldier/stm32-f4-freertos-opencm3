@@ -52,16 +52,14 @@ extern uint32_t rcc_ahb_frequency;
 #define INCLUDE_xTaskResumeFromISR              1
 #define INCLUDE_xTimerPendFunctionCall          0
 
-#define configKERNEL_INTERRUPT_PRIORITY         0xFF
-#define configMAX_SYSCALL_INTERRUPT_PRIORITY    0xB0
-#define configLIBRARY_KERNEL_INTERRUPT_PRIORITY 15
-
+#define configKERNEL_INTERRUPT_PRIORITY         (15 << 4)
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY    (5 << 4)
 
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 #define configSUPPORT_STATIC_ALLOCATION         0
 
 #define configUSE_TIMERS                        1
-#define configTIMER_TASK_PRIORITY               (configMAX_PRIORITIES - 1)
+#define configTIMER_TASK_PRIORITY               (configMAX_PRIORITIES + 1)
 #define configTIMER_QUEUE_LENGTH                32
 #define configTIMER_TASK_STACK_DEPTH            configMINIMAL_STACK_SIZE
 
