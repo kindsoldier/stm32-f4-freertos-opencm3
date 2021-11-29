@@ -6,7 +6,7 @@ Code based on FreeRTOS v10, opencm3 and STM32F407 MCU
 I released "from scratch"
 - FSMC bus inteface w register tools
 - ILI934 based console over FSMC bus
-- USART buffered interface
+- UART buffered interface
 - newlib minimal syscalls 
 - Board RTC timer driver
 - Random generator driver
